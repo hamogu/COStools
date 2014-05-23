@@ -1,0 +1,44 @@
+import numpy as np
+
+import astropy.units as u
+
+from .. import coadd_simple, COSspectrum
+
+class SetupData(object):
+    @property
+    def a(self):
+        wave = np.arange(5000., 5500., 1.) * u.Angstroem
+        flux = (1. + np.random.random(len(wave))) * u.erg/u.Angtroem/u.second
+        spec = COSspectrum({'WAVE':wave, 'FLUX': flux}, dispersion='WAVE')
+        spec.meta['ORIGIN'] = 'Example'
+        return spec
+
+class TestCoadd(SetupData):
+    def test_coadd_simple(self):
+        out = coadd_simple([SetupData.a, SetupData.a, SetupData.a])
+        assert np.all(np.abs(out.flux - SetupData.a.flux) < 1.e6)
+        assert out.disp == SetupData.a.disp
+
+    
+    def test_coadd_disp(self):
+        disp = np.arange(5050, 5100) * u.Angstrom
+        out = coadd_simple([SetupData.a, SetupData.a, SetupData.a], dispersion=disp)
+        assert out.disp == disp
+        assert ouot.flux == SetupData.a.flux[50:100]
+
+class TestSpectrum(SetupData):
+    def test_slicedisp(self):
+        out = SetupData.a.slice_disp([5050*u.Angstroem, 5100*u.Angtroem])
+        assert np.min(out.disp.value) == 5050
+        assert np.max(out.disp.value) == 5100
+        assert spec.meta['ORIGIN'] == 'Example'
+        
+
+    def test_slicerv(self):
+        out = SetupData.a.slice_rv([-300*u.km/u.s, +3e7*u.cm/u.s], 520.*u.nm)
+        assert np.min(out.disp.value) == 5195
+        assert np.max(out.disp.value) == 5205
+        assert spec.meta['ORIGIN'] == 'Example'
+        
+        
+

@@ -1,8 +1,11 @@
+from copy import deepcopy
+
 import numpy as np
 
 import astropy.units as u
 
 from ..spectrum import coadd_simple, COSspectrum
+
 
 class SetupData(object):
     @property
@@ -14,6 +17,7 @@ class SetupData(object):
             spec.meta['ORIGIN'] = 'Example'
             self._a = spec
         return self._a
+
 
     @property
     def b(self):
@@ -41,24 +45,18 @@ class SetupData(object):
         return self._c
 
 
-class TestCoadd(SetupData):
-    def test_coadd_simple(self):
-        out = coadd_simple([self.a, self.a, self.a])
-        assert np.all(np.abs(out.flux/self.a.flux-1) < 1e-6)
-        assert np.all(out.disp == self.a.disp)
+    @property
+    def d(self):
+        if not hasattr(self, '_d'):
+            wave = np.arange(5020, 5030) * u.Angstrom
+            flux = (np.arange(10)) * u.erg/u.Angstrom/u.second
+            error = 0.1 * flux + 0.1 * u.erg/u.Angstrom/u.second
+            spec = COSspectrum({'WAVE':wave, 'FLUX': flux, 'ERROR': error}, 
+                               dispersion='WAVE', uncertainty='ERROR')
+            spec.meta['ORIGIN'] = 'Example'
+            self._d = spec
+        return self._d
 
-    def test_coadd_simple_error(self):
-        out = coadd_simple([self.b, self.b, self.b])
-        assert np.all(np.abs(out.flux/self.b.flux-1) < 1e-6)
-        assert np.all(np.abs(out.error/(0.1/np.sqrt(3)*u.erg/u.AA/u.second)-1) < 1e-6)
-        assert np.all(out.disp == self.b.disp)
-
-    
-    def test_coadd_disp(self):
-        disp = np.arange(5050, 5100) * u.Angstrom
-        out = coadd_simple([self.a, self.a, self.a], dispersion=disp)
-        assert np.all(out.disp == disp)
-        assert np.all(np.abs(out.flux/self.a.flux[50:100]-1) < 1e-6)
 
 class TestSpectrum(SetupData):
     def test_slicedisp(self):
@@ -77,7 +75,7 @@ class TestSpectrum(SetupData):
         assert out.meta['ORIGIN'] == 'Example'
         
     
-    def test_nbin(self):
+    def test_binup(self):
         out = self.b.bin_up(2)
         assert np.all(out.disp == np.arange(5000.5,5500, 2) * u.AA)
         assert np.all(np.abs(out.error- 0.1/np.sqrt(2)* u.erg/u.Angstrom/u.second) < 1e-6* u.erg/u.Angstrom/u.second)
@@ -92,6 +90,7 @@ class TestSpectrum(SetupData):
         assert np.all(np.abs(out.flux/(np.arange(0.5, 9)* u.erg/u.Angstrom/u.second)-1)<1e-6)
         assert out.meta['ORIGIN'] == 'Example'
 
+
     def test_interpol_nearest(self):
         wave = np.arange(500.01, 501, 0.1) * u.nm
         out = self.c.interpol(wave, kind='nearest', bounds_error=False)
@@ -99,3 +98,47 @@ class TestSpectrum(SetupData):
         assert np.all(out.flux[:-1] == self.c.flux[:-1])
         assert np.isnan(out.flux[-1])  # out of bound interpolation
         assert np.all(out.error[:-1] == self.c.error[:-1])
+
+
+    def test_shiftrv(self):
+        wave = np.array([100, 300]) * u.nm
+        flux = np.array([1,1]) * u.W / u.second
+        spec = COSspectrum({'WAVE':wave, 'FLUX': flux}, dispersion='WAVE')
+        spec.shift_rv(300*u.km/u.s)
+        assert np.abs(spec.disp[0]/(100.1*u.nm)-1) < 1e-6
+        assert np.abs(spec.disp[1]/(300.3*u.nm)-1) < 1e-6
+
+class TestCoadd(SetupData):
+    def test_coadd_one(self):
+        out = coadd_simple([self.c])
+        assert np.all(self.c.flux == out.flux)
+        assert np.all(self.c.error == out.error)
+
+
+    def test_coadd_simple(self):
+        out = coadd_simple([self.a, self.a, self.a])
+        assert np.all(np.abs(out.flux/self.a.flux-1) < 1e-6)
+        assert np.all(out.disp == self.a.disp)
+
+
+    def test_coadd_simple_error(self):
+        out = coadd_simple([self.b, self.b, self.b])
+        assert np.all(np.abs(out.flux/self.b.flux-1) < 1e-6)
+        assert np.all(np.abs(out.error/(0.1/np.sqrt(3)*u.erg/u.AA/u.second)-1) < 1e-6)
+        assert np.all(out.disp == self.b.disp)
+
+    
+    def test_coadd_disp(self):
+        disp = np.arange(5050, 5100) * u.Angstrom
+        out = coadd_simple([self.a, self.a, self.a], dispersion=disp)
+        assert np.all(out.disp == disp)
+        assert np.all(np.abs(out.flux/self.a.flux[50:100]-1) < 1e-6)
+
+
+    def test_coadd_nonoverlapping(self):
+        disp = np.arange(5000,5030) * u.Angstrom
+        out = coadd_simple([self.c, self.d], dispersion=disp, bounds_error=False)
+        assert np.all(self.c.flux == out.flux[:len(self.c)])
+        assert np.all(self.c.error == out.error[:len(self.c)])
+        assert np.all(self.d.flux == out.flux[-len(self.d):])
+        assert np.all(self.d.error == out.error[-len(self.d):])

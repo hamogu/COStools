@@ -25,6 +25,11 @@ def coadd_simple(spectra, dispersion=None, **kwargs):
     All spectra are interpolated to `dispersion` and for each wavelengths bin the
     mean over all n spectra is calculated. The reported uncertainty is just the mean
     of all uncertainties scaled by 1/sqrt(n).
+    Nan values are ignored in the calculation of the mean. Thus, this method can be used
+    if not all spectra have the same wavelength range. Supply the keyword
+    ``bounds_error=False``, so that the interpolation return ``nan``s outside the range
+    covered by the spectrum.
+        
 
     Parameters
     ----------
@@ -43,6 +48,7 @@ def coadd_simple(spectra, dispersion=None, **kwargs):
     See also
     --------
     coadd_errorweighted (not implemented yet)
+    
     '''
     if dispersion is None:
         dispersion = spectra[0].disp
@@ -59,14 +65,21 @@ def coadd_simple(spectra, dispersion=None, **kwargs):
         else:
             errors[i,:] = s_new.error.to(fluxunit)
 
-    fluxes = fluxes.mean(axis=0) * fluxunit
+    # This can be simplified considerably as soon as masked quantities exist.
+    fluxes = np.ma.fix_invalid(fluxes)
+    fluxmask = np.ma.getmaskarray(fluxes)
+    fluxes = fluxes.mean(axis=0).filled(fill_value=np.nan) * fluxunit
+    
     if errors is None:
         return COSspectrum(data=[dispersion, fluxes],
                            names=[spectra[0].dispersion, 'FLUX'],
                            dispersion=spectra[0].dispersion,
                            )
     else:
-        errors =  errors.mean(axis=0)/np.sqrt(len(spectra))*fluxunit
+        errors =  np.ma.fix_invalid(errors)
+        if fluxmask.sum() > 0:
+            errors[fluxmask] = np.ma.masked  # In case flux has more entries masked than error
+        errors = (errors.mean(axis=0)/np.sqrt((~np.ma.getmaskarray(errors)).sum(axis=0))).filled(np.nan)*fluxunit
         return COSspectrum(data=[dispersion, fluxes, errors],
                            names=[spectra[0].dispersion, 'FLUX', spectra[0].uncertainty], 
                        dispersion=spectra[0].dispersion, uncertainty=spectra[0].uncertainty,
@@ -211,14 +224,15 @@ class COSspectrum(table.Table):
         Parameters
         ----------
         rv : astropy.quantity.Quantity
-            radial velocity
+            radial velocity (positive value will red-shift the spectrum, negative
+            value will blue-shift the spectrum)
         '''
         self[self.dispersion] = (self.disp.to(u.m, equivalencies=u.spectral()) * (
-                1.*u.dimensionless_unscaled-rv/const.c)).to(
-                self.disp.unit, equivalenvies=u.spectral()).value
+                1.*u.dimensionless_unscaled+rv/const.c)).to(
+                self.disp.unit, equivalencies=u.spectral()).value
 
 
-    # overload add, substract, devide to interpol automatically?
+    # overload add, substract, divide to interpol automatically?
         
     def bin_up(self, factor, other_cols={}):
         '''bin up an array by factor factor
@@ -268,6 +282,20 @@ class COSspectrum(table.Table):
 
 
     def interpol(self, new_dispersion, **kwargs):
+        '''Interpolate a spectrum onto a new dispersion axis.
+
+        Parameters
+        ----------
+        new_dispersion : ~astropy.quantity.Quantity
+           The new dispersion axis.
+
+        All other keywords are passed directly to scipy.interpolate.interp1d.
+
+        Returns
+        -------
+        spec : COSspectrum
+            A new spectrum.
+        '''
         new_disp = new_dispersion.to(self.disp.unit, equivalencies=u.spectral())
 
         f_flux = interp1d(self.disp, self.flux, **kwargs)

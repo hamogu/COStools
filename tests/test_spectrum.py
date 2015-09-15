@@ -82,6 +82,13 @@ class TestSpectrum(SetupData):
         assert np.abs(out.flux[0] / ((self.b.flux[0]+self.b.flux[1])/2.) -1.) < 1e-6
         assert out.meta['ORIGIN'] == 'Example'
 
+    def test_bin_up_noexact(self):
+        out = self.b[:11]
+        assert len(out) == 11
+        assert len(out.bin_up(2)) == 5
+        assert len(out.bin_up(3)) == 3
+        assert len(out.bin_up(11)) == 1
+
 
     def test_interpol(self):
         wave = np.arange(500.05, 500.9, 0.1) * u.nm

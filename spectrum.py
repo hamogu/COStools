@@ -1,22 +1,31 @@
+from copy import deepcopy
+
 import warnings
 
 import numpy as np
 from scipy.interpolate import interp1d
-# could implement fallback to np.interp is scipy is not available
+# could implement fallback to np.interp if scipy is not available
 
 from astropy import table
 import astropy.units as u
 import astropy.constants as const
 from astropy.extern import six
+from astropy.modeling import models, fitting
 
 # These are functions in order to emphasize that they do stuff to spectra,
 # it's not a property of the spectrum.
-# Or put everything for single spectrum un spectrum?
+# Or put everything for single spectrum in spectrum class?
 # bin_up is not for flux spectrum.
 # should use np.sum() for count number spectrum -> Inheritance diagram
-# instead of slice disp, should I just support that in __getitem__ (if inout is a 
+# instead of slice disp, should I just support that in __getitem__ (if input is a 
 # wavelength) or is that too magical?
 # currently use doppler_optical - make different options (e.g. variable)
+# add way to change units, e.g. wave in km/s, flux at different scale
+# Allow None for slice to go to end of array? Or just tell people to use np/inf with proper units?
+# change COS spectrum init, so that I can initialize a spectrum form a spectrum (need to copy disp etc)
+# investigate why deepcopy(sepctrum) does not copy dispersion and how to fix that
+# implement devision to return "flux ratio object" (which could just be spectrum with a different flux name)?
+# make slice_XXX accept list of  ranges, e.g. left and right of line.
 
 
 def coadd_simple(spectra, dispersion=None, **kwargs):
@@ -86,6 +95,47 @@ def coadd_simple(spectra, dispersion=None, **kwargs):
                            )
 
 
+def xcorr(speclist, waverange):
+    '''cross-correlate spectral segments in a certain range
+
+    Parameters
+    ----------
+    speclist : list
+        List of COS spectra with 'WAVELENGTH' and 'FLUX' columns
+    waverange : [float, float]
+        lower and upper end of wavelength range
+  
+    Returns
+    -------
+    res : array of len(speclist)
+        shift relative to first spectrum in speclist
+       
+    To-Do
+    -----
+    find / report some diagnostic for the case that the correlation does not work well
+    make wavelength shift array an input
+    find way to make faster
+    rename speclist to spectra for consistency with coadd
+    unit tests
+    '''
+    specbase = speclist[0].slice_disp(waverange)
+    res = np.zeros(len(speclist))
+    shift = np.arange(-20.,+20) * u.km/u.s # see below - careful when changing
+    cor = np.zeros(shift.shape)
+    for j in range(len(speclist)):
+        testspec = deepcopy(speclist[j])
+        testspec.dispersion = speclist[j].dispersion 
+        testspec.shift_rv(-21*u.km/u.s)
+        for i in range(len(cor)):
+            testspec.shift_rv(1*u.km/u.s) # see above
+            cor[i] = (specbase.flux * testspec.interpol(specbase.disp).flux).sum().value
+        g = models.Gaussian1D(amplitude=np.max(cor), mean=0., stddev=0.5)
+        pfit = fitting.NonLinearLSQFitter()
+        new_model = pfit(g, shift, cor)
+        res[j] = new_model.mean.value
+    return res
+
+
 class COSspectrum(table.Table):
     '''
     To make more general:
@@ -126,7 +176,7 @@ class COSspectrum(table.Table):
         '''specific to COS - can be made into a Reader'''
         data = []
         
-        tab = Table.read(filename)
+        tab = table.Table.read(filename)
         for c in tab.columns:
             if len(tab[c].shape) == 2:
                 data.append(table.Column(data=tab[c].data.flatten(),
@@ -268,7 +318,7 @@ class COSspectrum(table.Table):
         # Which cols to keep?
         keepcols = set([x for x in [self.dispersion, self.fluxname, self.uncertainty] if x is not None])
         keepcols = keepcols.union(set(other_cols.keys()))
-        spec = self[list(keepcols)][::factor]
+        spec = self[list(keepcols)][:n*factor:factor]
         spec[self.dispersion] = (self.disp[:n*factor].reshape((n, factor))).mean(axis=1)
         if self.uncertainty is None:
             spec[self.fluxname] = (self.flux[:n*factor].reshape((n, factor))).mean(axis=1)
@@ -324,3 +374,9 @@ class COSspectrum(table.Table):
         return self.__class__(newcols, meta=self.meta, dispersion=self.dispersion, 
                               uncertainty=self.uncertainty)
         
+    def crosscorrelate(self, dispersion, flux):
+        '''or as a module level function?
+        Do full thing here with steps, return best fit etc? or only calculate one spesific
+        step?
+        '''
+        raise NotImplementedError

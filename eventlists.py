@@ -2,101 +2,102 @@
     - Timing
 '''
 import numpy as np
-import numpy.random
 import scipy
 import scipy.stats
-import sys
 import matplotlib as mpl
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
-sys.path.append('/data/hguenther/Dropbox/code/python/PyAstronomy-0.2.0')
 from PyAstronomy.pyTiming import pyPeriod
-import atpy
+from astropy.table import Table
 import glob
 import pickle
 import os
 
-sys.path.append('/data/hguenther/Dropbox/my_articles/TW_Hya_UV/python')
-import HSTplotdefs as pd
-sys.path.append('/data/hguenther/Dropbox/code/python/utils')
 from detrend_poly import detrend_poly
 
-def tabmax(tab, key, bin = 1):
+
+def tabmax(tab, key, bin=1):
     '''bin a table in `key` and return position of largest bin
-    
+
     Use this to find e.g. the stongest line in an event list.
     '''
     minx = min(tab[key])
     maxx = max(tab[key])
-    hist, bins = np.histogram(tab[key], bins = (maxx-minx)/bin)
+    hist, bins = np.histogram(tab[key], bins=(maxx - minx) / bin)
     amax = np.argmax(hist)
-    return np.mean(bins[amax:amax+2])
+    return np.mean(bins[amax:amax + 2])
+
 
 '''To Do:
     - determin deadtime automatically from header values
 '''
+
+
 class CosCounts(object):
     '''COS eventlist data
-    
-    This oject holds tha tdata from a single COS eventlist.
+
+    This oject holds a single COS eventlist.
     It performs deadtime corrections and provides methods to generate
     descriptors of the dataset, e.g. calculate a Lomb-Scargle periodogram.
     '''
     clock_cycle = 0.032
-    
-    def __init__(self, filename, nsum = 1, deadtime = None, CIV = False):
+
+    def __init__(self, filename, nsum=1, deadtime=None, CIV=False):
         '''generate some descriptive statistic from event list
-    
+
         Parameters
         ----------
         filename : string
         nsum : integer
             rebinning factor for primitive statistics
-            When rebinned with `nsum`, then make bins so that they all have same number of time steps, because the binning
+            When rebinned with `nsum`, then make bins so that they all have
+            same number of time steps, because the binning
             introduces artificial frequencies / autocorrelation otherwise
-            Use `nsum` to bin up, so that the count number in each bin is Gaussian distributed
+            Use `nsum` to bin up, so that the count number in each bin
+            is Gaussian distributed.
         '''
-        
-        tab = atpy.Table(filename, hdu = 1)
-        #make unfiltered lc. That's important for the dead-time correction
-        hist, bins = np.histogram(tab.TIME/self.clock_cycle, bins = np.arange(-.5,max(tab.TIME/self.clock_cycle), nsum))
+        tab = Table.read(filename, hdu=1)
+        # make unfiltered lc. That's important for the dead-time correction
+        hist, bins = np.histogram(tab['TIME'] / self.clock_cycle,
+                                  bins=np.arange(-.5, max(tab['TIME'] / self.clock_cycle), nsum))
         self.full_lc = hist
-        #FUV
+        # FUV
         if 'rawtag_' in filename:
-            ypos = tabmax(tab, 'RAWY', bin = 10)
-            tab = tab.where((tab.RAWY > ypos-40) & (tab.RAWY < ypos+40))
-        #NUV
+            ypos = tabmax(tab, 'RAWY', bin=10)
+            tab = tab[(tab['RAWY'] > ypos - 40) & (tab['RAWY'] < ypos + 40)]
+        # NUV
         else:
-            tab = tab.where(tab.RAWY < 500)
-        #C IV is brightest line
+            tab = tab[tab['RAWY'] < 500]
+        # C IV is brightest line
         if CIV:
-            xpos = tabmax(tab, 'RAWX', bin = 100)
-            tab = tab.where((tab.RAWX > xpos-250) & (tab.RAWX < xpos+500))
-        
-        hist, bins = np.histogram(tab.TIME/self.clock_cycle, bins = np.arange(-.5,max(tab.TIME/self.clock_cycle), nsum))
+            xpos = tabmax(tab, 'RAWX', bin=100)
+            tab = tab[(tab['RAWX'] > xpos - 250) & (tab['RAWX'] < xpos + 500)]
+
+        hist, bins = np.histogram(tab['TIME'] / self.clock_cycle,
+                                  bins=np.arange(-.5, max(tab['TIME'] / self.clock_cycle), nsum))
         self.hist = hist
         self.bins = bins
         self.deadtime = deadtime
         self.clock_cycle *= nsum
-        
-        
+
     def LombScargle(self):
         '''find significance of highest peak in COS event list
-    
+
         This routine bins an event list in 0.032s indervals (the clock time)
         and runs a Lomb-Scargle periodogram.
         It return the false alarm probability (FAP) of the highest peak.
         '''
         # LombScargle expects even number of entries
-        start = self.hist.shape[0]%2
-        lc = pyPeriod.TimeSeries(self.bins[start+1:], mlab.detrend_linear(self.hist[start:]))
+        start = self.hist.shape[0] % 2
+        lc = pyPeriod.TimeSeries(self.bins[start + 1:],
+                                 mlab.detrend_linear(self.hist[start:]))
         self.ls = pyPeriod.LombScargle(lc, ofac=1, hifac=1)
-        # ignore the lowest freq (= the length of the dataset) 
+        # ignore the lowest freq (= the length of the dataset)
         return self.ls.FAP(max(self.ls.power[3:])), max(self.ls.power[3:])
 
     def stats(self):
         '''generate some descriptive statistice from event list
-        
+
         Returns
         -------
         n : integer
@@ -118,9 +119,9 @@ class CosCounts(object):
 
         return len(self.hist), mean, var, kurt, slope, p
 
-    def deadtime_corr(self, nsum = [1]):
+    def deadtime_corr(self, nsum=[1]):
         '''return mean and var for deadtime corrected lightcurves
-        
+
         Caution: Any event on the detector will start the dead-time,
         even if it comes from the wavecal lamps!
         '''
@@ -136,12 +137,12 @@ class CosCounts(object):
             dead_time_corr_lc = hist / (1.-(full_lc/timebin)*self.deadtime)
             var_dead_time.append(scipy.var(detrend_poly(dead_time_corr_lc, deg = 3)))
             mean_dead_time.append(np.mean(dead_time_corr_lc))
-    
+
         return np.array(mean_dead_time), np.array(var_dead_time)
 
     def acorr(self):
         '''generate some descriptive statistice from event list
-    
+
         Returns
         -------
         slope : float
@@ -152,12 +153,13 @@ class CosCounts(object):
         linregress = scipy.stats.linregress(lags[lags > 0], c[lags > 0])
         return linregress[0]
 
-def analyse_COS_counts(COS, tab, i, do_FAP = True):
+
+def analyse_COS_counts(COS, tab, i, do_FAP=True):
     '''calcualte some statistical description for a COS object
-    
+
     i.e. calculate LS, var, mean, ... , and deadtime corrected quantities
     Place the results in line i of the tab table
-    
+
     Parameters
     ---------
     COS : CosCounts object
@@ -191,7 +193,7 @@ def tab_COS_counts_analysis(globfile):
     tab.add_empty_column('deadtimevar', dtype = np.float, shape = (len(tab), len(tab.nsum)))
     return tab
 
-    
+
 def analyse_all_COS_evts(datapath, do_FAP = True):
     '''call analyse_COS_counts for all eventlists in datapath
     '''
@@ -209,13 +211,13 @@ def analyse_all_COS_evts(datapath, do_FAP = True):
 
     for i, spec in enumerate(tnuv['file']):
         analyse_COS_counts(CosCounts(str(spec), deadtime = 2.8e-7), tnuv, i, do_FAP = do_FAP)
-    
+
     return tnuv, tuva, tuvb, tciv
 
 ### Plot scripts ###
 
 def plot_FAPs(tnuv, tuva, tuvb, tciv):
-    
+
     FAP = np.hstack([[0.],tnuv.FAP, tuva.FAP, tuvb.FAP, tciv.FAP]) # add 0 point for plotting purposes
     FAP.sort()
     y = np.arange(0,len(FAP), dtype= np.float)
@@ -227,18 +229,18 @@ def plot_FAPs(tnuv, tuva, tuvb, tciv):
     ax.set_ylabel('cumulative distribution')
     pd.plotfile(fig, 'FAPs')
     return fig, ax
-    
+
 class extranoise(object):
     def __init__(self, sample1, sample2):
         self.sample1 = sample1
         self.sample2 = sample2
     def __call__(self, x, p):
-        '''find the x where sample1 and x*sample2 could be drawn from 
-        the same parent distribution according to a KS test with exactly 
+        '''find the x where sample1 and x*sample2 could be drawn from
+        the same parent distribution according to a KS test with exactly
         significance p
-        
+
         x : ndarray of len 1
-            
+
         p : float
             probability
         '''
@@ -246,14 +248,14 @@ class extranoise(object):
         #to find only x > 1
         penalty = 0 if x > 0. else 1. + (- x) *10.
         return np.abs(ksout[1] - p) + penalty
-    
+
 def plot_sigma(tnuv, tuva, tuvb, tciv, multsim = 1):
     #add a 0 so that the plot starts on the xaxis?
     var = np.vstack([tnuv.deadtimevar, tuva.deadtimevar, tuvb.deadtimevar, tciv.deadtimevar])
     mean = np.vstack([tnuv.deadtimemean, tuva.deadtimemean, tuvb.deadtimemean, tciv.deadtimemean])
     n = np.hstack([tnuv.n, tuva.n, tuvb.n, tciv.n])
     deadtime = np.hstack([np.tile(2.8e-7, len(tnuv)), np.tile(7.4e-6, len(tuva) + len(tuvb) + len(tciv))])
-    
+
     '''Simulations take a long time. Open from file if these simlations
     exist, otherwise calculate autoematically and save result'''
     try:
@@ -261,7 +263,7 @@ def plot_sigma(tnuv, tuva, tuvb, tciv, multsim = 1):
             simmean = pickle.load(simfile)
         with open(os.path.join(pd.simpath,'simvar'+str(multsim)+'.dump')) as  simfile:
             simvar = pickle.load(simfile)
-        
+
     except IOError:
         print 'No pre-computed lcs found.'
         print 'Simulating lcs. This make take a long time...'
@@ -275,19 +277,19 @@ def plot_sigma(tnuv, tuva, tuvb, tciv, multsim = 1):
             pickle.dump(simmean, simfile)
         with open(os.path.join(pd.simpath,'simvar'+str(multsim)+'.dump'), 'w') as  simfile:
             pickle.dump(simvar, simfile)
-    
+
     #Plot 1 : chi^2 for nsum = 1
     rat = var[:,0]/mean[:,0]
     simrat = simvar[:,0]/simmean[:,0]
     rat.sort()
     simrat.sort()
-    
+
     fig, ax = plot_variancechi2(rat, simrat, n)
-    
+
     #plot2 : limit on extra variability
     extranoisefac = np.array(tnuv.nsum, dtype = np.float)
     ksobssim = np.array(tnuv.nsum, dtype = np.float)
-    
+
     for i in range(len(extranoisefac)):
         rat = var[:,i]/mean[:,i]
         rat.sort()
@@ -301,9 +303,9 @@ def plot_sigma(tnuv, tuva, tuvb, tciv, multsim = 1):
     # calc extranoisefac as ratio to flux
     extranoisefracofflux = extranoisefac / np.median(mean, axis = 0)
     fig2, ax2 = plot_sigmathreshold(tnuv.nsum, extranoisefracofflux)
-    
+
     return fig, ax, fig2, ax2
-    
+
 def plot_sigmathreshold(nsum, extranoisefracofflux):
     ind = ((nsum * 0.032) < 150.)
     fig = plt.figure()
@@ -313,12 +315,12 @@ def plot_sigmathreshold(nsum, extranoisefracofflux):
     ax.set_ylabel('threshold')
     pd.plotfile(fig, 'sigmathreshold')
     return fig, ax
-    
+
 def plot_variancechi2(rat, ratsim, n):
     x = np.arange(1,max(n)*5.,5.)
     y = np.arange(0,len(rat), dtype= np.float)
     simy = np.arange(0,len(ratsim), dtype= np.float)
-    
+
     fig = plt.figure()
     ax = fig.add_subplot(111)
     ax.plot(rat, y/max(y), 'o', mew = 2, label='data')
@@ -330,27 +332,27 @@ def plot_variancechi2(rat, ratsim, n):
     ax.set_ylabel('cumulative distribution')
     pd.plotfile(fig, 'sigmas')
     return fig, ax
-    
+
 
 
 
 class SimLc(object):
     timebin = .032
-    
+
     def __init__(self, time, countrate, deadtime = None):
         self.deadtime = deadtime
         self.TIME_0 = np.random.random_sample(time*countrate) * time
         self.TIME_0.sort()
         self.TIME = self.apply_dead_time(self.TIME_0)
         self.TIME = self.apply_time_resolution(self.TIME)
-        
+
     def apply_dead_time(self, TIME):
         diff = np.zeros_like(TIME)
         #alkways keep first photon
         diff[0] = np.inf
         diff[1:] = np.diff(TIME)
         return TIME[diff > self.deadtime]
-        
+
     def apply_time_resolution(self, TIME):
         bins = np.arange(-self.timebin/2., max(TIME)+self.timebin*2., self.timebin)
         dig = np.digitize(TIME, bins)
@@ -358,17 +360,17 @@ class SimLc(object):
 
 def sim_deadtime(time, countrate, deadtime, nsum = [1]):
     '''simulate a sample of lightcurves
-    
+
     For each lightcurve the length and the true countrate are given.
     The photon arrival times are randomnly distributed, than events within
     the dead-time are discarded.
-    (This uses an approximate algorithm, which assumes that at most one 
+    (This uses an approximate algorithm, which assumes that at most one
     photon arrived during the dead time. This approximation should be valid
     for low count rates.)
     The lightcurve is than binned to the instrumental clock cycle.
     This data is treated with the same procedures as the observed data to
     obtain dead-time corrected mean and var values.
-    
+
     Parameters
     ----------
     time : array_like
@@ -379,7 +381,7 @@ def sim_deadtime(time, countrate, deadtime, nsum = [1]):
         deadtime (in s) for each lightcurve
     nsum : array_like, optional
         list of nsum parameters
-        
+
     Returns
     -------
     mean : ndarray
@@ -397,7 +399,7 @@ def sim_deadtime(time, countrate, deadtime, nsum = [1]):
         lc = SimLc(time[i], countrate[i], deadtime[i])
         mean[i,:], var[i,:] = COS_counts_noise(lc, nsum = nsum)
     return mean, var
-        
+
 def plot_periodogram(hist, bins):
     def lspow(sig):
         return scipy.optimize.fmin(lambda x : np.abs(ls.FAP(x)-sig),[10.], disp = False)
@@ -410,7 +412,7 @@ def plot_periodogram(hist, bins):
     #ax.plot(ls.freq, ls.power, lw = 2.)
     #ax.plot(ax.get_xlim(), lspow(0.1) * np.array(1., 1., dtype = np.float), 'k:' )
     #ax.plot(ax.get_xlim(), lspow(0.01) * np.array(1., 1., dtype = np.float), 'k:')
-    fig, ax = ls.plot(lw = 2., FAPlevels = [.1, 0.01]) 
+    fig, ax = ls.plot(lw = 2., FAPlevels = [.1, 0.01])
     #ax.set_ylabel('Scargle Power')
     ax.set_xlabel('Frequency [Hz]')
     pd.plotfile(fig, 'LSperiodogram')
@@ -435,7 +437,7 @@ def plot_acorr(hist, bins):
     ind = (lag >=0)
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    
+
     ax.plot(lag[ind], acorr[ind])
     ax.set_ylabel('Autocorrelation coefficient')
     ax.set_xlabel('Time scale [s]')
@@ -473,7 +475,7 @@ def sim_ls(n_mc, *args):
     lspower = lspower[ind]
     FAP = FAP[ind]
     return lspower, FAP
-    
+
 
 def print_MC_LS_FAP(filename, nsum = 1, nsim = 1000, n_sin = 100, a_sin = .01):
     cos = CosCounts(filename, nsum = nsum, deadtime = 7.4e-7)
@@ -489,20 +491,20 @@ def print_MC_LS_FAP(filename, nsum = 1, nsim = 1000, n_sin = 100, a_sin = .01):
     simpower.sort()
     print 'more than 90%, 95%, 99% of all simulations have an LS power > ', simpower[(1.-0.9)*nsim], simpower[(1.-0.95) * nsim], simpower[(1.-0.99) * nsim]
     print ' that is FAP of ', FAP[(1.-0.9)*nsim], FAP[(1.-0.95) * nsim], FAP[(1.-0.99) * nsim]
-    
+
     return simpower
-    
+
 
 if __name__ == "__main__":
-    
+
     mpl.rcParams['font.size']=16
     mpl.rcParams['ps.fonttype'] =42
     mpl.rcParams['legend.fontsize']='large'
-    
+
     tnuv, tuva, tuvb, tciv = analyse_all_COS_evts(pd.datapath, do_FAP = False)
-    
+
     #fig, ax = plot_FAPs(tnuv, tuva, tuvb, tciv)
-    
+
     #tab = atpy.Table(str(tuva.file[7]), hdu = 1)
     #ypos = tabmax(tab, 'RAWY', bin = 10)
     #tab = tab.where((tab.RAWY > ypos-40) & (tab.RAWY < ypos+40))
@@ -511,6 +513,6 @@ if __name__ == "__main__":
     #fig, ax = plot_periodogram(hist, bins)
     #fig, ax = plot_lc(hist, bins)
     #fig, ax = plot_acorr(hist, bins)
-    
+
     fig, ax, fig2, ax2 = plot_sigma(tnuv, tuva, tuvb, tciv, multsim = 1)
     simpower = print_MC_LS_FAP(str(tuva.file[7]), nsum = 1, nsim = 1000, n_sin = 100, a_sin = .05)
